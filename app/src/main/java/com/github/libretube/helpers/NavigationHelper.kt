@@ -67,7 +67,7 @@ object NavigationHelper {
                 PlayingQueue.clearAfterCurrent()
                 this.playVideo(playerData.videoId.toID())
 
-                if (audioOnlyPlayerRequested) {
+                if (audioOnlyPlayerRequested || (PreferenceHelper.getBoolean(PreferenceKeys.AUDIOBOOK_MODE, false) && !forceVideo)) {
                     // switch to audio only player
                     this.switchToAudioMode()
                 } else {
@@ -84,6 +84,7 @@ object NavigationHelper {
         if (attachedToRunningPlayer) return
 
         val audioOnlyMode = PreferenceHelper.getBoolean(PreferenceKeys.AUDIO_ONLY_MODE, false)
+        val audiobookMode = PreferenceHelper.getBoolean(PreferenceKeys.AUDIOBOOK_MODE, false)
         val attachedToRunningAudioPlayer = activity.runOnAudioPlayerFragment {
             // can only continue using player if in same mode (online/offline)
             // otherwise, recreate the player
@@ -92,7 +93,7 @@ object NavigationHelper {
             PlayingQueue.clearAfterCurrent()
             this.playNextVideo(playerData.videoId.toID())
 
-            if (!audioOnlyPlayerRequested && !audioOnlyMode) {
+            if (forceVideo || (!audioOnlyPlayerRequested && !audioOnlyMode && !audiobookMode)) {
                 // switch to video only player
                 this.switchToVideoMode(playerData.videoId.toID())
             } else {
@@ -104,7 +105,7 @@ object NavigationHelper {
         }
         if (attachedToRunningAudioPlayer) return
 
-        if (audioOnlyPlayerRequested || (audioOnlyMode && !forceVideo)) {
+        if (audioOnlyPlayerRequested || ((audioOnlyMode || audiobookMode) && !forceVideo)) {
             // in contrast to the video player, the audio player doesn't start a media service on
             // its own!
             BackgroundHelper.playOnBackground(context, playerData)

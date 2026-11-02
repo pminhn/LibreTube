@@ -19,6 +19,7 @@ import com.github.libretube.extensions.toID
 import com.github.libretube.extensions.toastFromMainDispatcher
 import com.github.libretube.parcelable.DownloadData
 import com.github.libretube.services.DownloadService
+import com.github.libretube.receivers.NotificationReceiver.Companion.ACTION_DOWNLOAD_RESUME
 import com.github.libretube.ui.dialogs.DownloadDialog
 import com.github.libretube.ui.dialogs.DownloadPlaylistDialog
 import com.github.libretube.ui.dialogs.ShareDialog
@@ -56,6 +57,13 @@ object DownloadHelper {
         val intent = Intent(context, DownloadService::class.java)
             .putExtra(IntentData.downloadData, downloadData)
 
+        ContextCompat.startForegroundService(context, intent)
+    }
+
+    fun resumeDownload(context: Context, id: Int) {
+        val intent = Intent(context, DownloadService::class.java)
+            .setAction(ACTION_DOWNLOAD_RESUME)
+            .putExtra("id", id)
         ContextCompat.startForegroundService(context, intent)
     }
 

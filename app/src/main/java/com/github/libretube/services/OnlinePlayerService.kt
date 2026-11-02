@@ -1,9 +1,14 @@
 package com.github.libretube.services
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.core.net.toUri
+import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -25,6 +30,8 @@ import com.github.libretube.api.obj.Segment
 import com.github.libretube.api.obj.Streams
 import com.github.libretube.constants.IntentData
 import com.github.libretube.db.DatabaseHelper
+import com.github.libretube.db.DatabaseHolder.Database
+import com.github.libretube.enums.FileType
 import com.github.libretube.extensions.TAG
 import com.github.libretube.extensions.parcelable
 import com.github.libretube.extensions.setMetadata
@@ -32,6 +39,9 @@ import com.github.libretube.extensions.toastFromMainDispatcher
 import com.github.libretube.extensions.toastFromMainThread
 import com.github.libretube.extensions.updateParameters
 import com.github.libretube.helpers.PlayerHelper
+import com.github.libretube.helpers.AudiobookDownloadHelper
+import com.github.libretube.helpers.PreferenceHelper
+import com.github.libretube.constants.PreferenceKeys
 import com.github.libretube.helpers.PlayerHelper.getSubtitleRoleFlags
 import com.github.libretube.helpers.ProxyHelper
 import com.github.libretube.parcelable.PlayerData
@@ -47,6 +57,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.io.path.exists
 
 /**
  * Loads the selected videos audio in background mode with a notification area.
@@ -72,10 +83,42 @@ open class OnlinePlayerService : AbstractPlayerService() {
      */
     private var fetchVideoInfoJob: Job? = null
 
+    private var audioDownloadReceiverRegistered = false
+    private val audioDownloadReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val completedVideoId = intent?.getStringExtra(AudiobookDownloadHelper.EXTRA_VIDEO_ID)
+                ?: return
+            if (completedVideoId != videoId || !isAudioOnlyPlayer || !isAudiobookModeEnabled()) return
+
+            scope.launch {
+                val item = withContext(Dispatchers.IO) {
+                    Database.downloadDao().findById(completedVideoId)?.downloadItems
+                        ?.firstOrNull { it.type == FileType.AUDIO && it.isFinished && it.path.exists() }
+                } ?: return@launch
+
+                val player = exoPlayer ?: return@launch
+                val position = player.currentPosition
+                val wasPlaying = player.playWhenReady
+                val mediaItem = MediaItem.Builder()
+                    .setUri(Uri.fromFile(item.path.toFile()))
+                    .apply { streams?.let { setMetadata(it, completedVideoId) } }
+                    .build()
+                player.setMediaItem(mediaItem, position)
+                player.prepare()
+                player.playWhenReady = wasPlaying
+            }
+        }
+    }
+
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 Player.STATE_ENDED -> {
+                    if (isAudiobookModeEnabled()) {
+                        scope.launch(Dispatchers.IO) {
+                            AudiobookDownloadHelper.scheduleCleanup(videoId)
+                        }
+                    }
                     if (!isTransitioning) playNextVideo(relatedStreams = streams?.relatedStreams)
                 }
 
@@ -110,6 +153,15 @@ open class OnlinePlayerService : AbstractPlayerService() {
             return
         }
         isAudioOnlyPlayer = args.getBoolean(IntentData.audioOnly)
+        if (!audioDownloadReceiverRegistered) {
+            ContextCompat.registerReceiver(
+                this,
+                audioDownloadReceiver,
+                IntentFilter(AudiobookDownloadHelper.ACTION_AUDIO_DOWNLOAD_COMPLETED),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+            audioDownloadReceiverRegistered = true
+        }
 
         // get the intent arguments
         videoId = playerData.videoId!!
@@ -161,6 +213,10 @@ open class OnlinePlayerService : AbstractPlayerService() {
                 SubscriptionHelper.submitFeedItemChange(it.toFeedItem())
             }
 
+            if (isAudioOnlyPlayer && isAudiobookModeEnabled()) {
+                queueAudiobookDownloads(videoId, streams!!)
+            }
+
             launch {
                 val segments = getSponsorBlockSegments()
                 withContext(Dispatchers.Main) { setSponsorBlockSegments(segments) }
@@ -176,21 +232,65 @@ open class OnlinePlayerService : AbstractPlayerService() {
         fetchVideoInfoJob = null
     }
 
-    private fun configurePlayer(seekToPositionMs: Long) {
-        // seek to the previous position if available
-        if (seekToPositionMs != 0L) {
-            exoPlayer?.seekTo(seekToPositionMs)
-        } else if (watchPositionsEnabled) {
-            scope.launch(Dispatchers.IO) {
-                UserDataRepositoryHelper.userDataRepository.getFromWatchHistory(videoId)?.metadata?.positionMillis?.let {
-                    if (!DatabaseHelper.isVideoWatched(it, streams?.duration)) {
-                        withContext(Dispatchers.Main) { exoPlayer?.seekTo(it) }
-                    }
-                }
-            }
-        }
+    private fun isAudiobookModeEnabled() =
+        PreferenceHelper.getBoolean(PreferenceKeys.AUDIOBOOK_MODE, false)
 
+    private fun queueAudiobookDownloads(currentVideoId: String, currentStreams: Streams) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                AudiobookDownloadHelper.cancelCleanup(currentVideoId)
+                AudiobookDownloadHelper.startDownload(this@OnlinePlayerService, currentVideoId, currentStreams)
+
+                // Queue loading from a YouTube playlist is asynchronous. Retry briefly so the
+                // first playlist item can prefetch its actual successor as well.
+                repeat(6) { attempt ->
+                    val nextVideoId = PlayingQueue.getNext()
+                    if (nextVideoId != null) {
+                        val existing = Database.downloadDao().findById(nextVideoId)
+                        if (existing?.downloadItems.orEmpty().none { it.type == FileType.AUDIO }) {
+                            val nextStreams = MediaServiceRepository.instance.getStreams(nextVideoId)
+                            AudiobookDownloadHelper.startDownload(
+                                this@OnlinePlayerService,
+                                nextVideoId,
+                                nextStreams
+                            )
+                        }
+                        return@launch
+                    }
+                    if (attempt < 5) kotlinx.coroutines.delay(1_000)
+                }
+            }.onFailure { Log.w(TAG(), "Could not queue audiobook audio downloads", it) }
+        }
+    }
+
+    override fun onDestroy() {
+        if (audioDownloadReceiverRegistered) {
+            runCatching { unregisterReceiver(audioDownloadReceiver) }
+            audioDownloadReceiverRegistered = false
+        }
+        super.onDestroy()
+    }
+
+    private suspend fun configurePlayer(seekToPositionMs: Long) {
+        val targetVideoId = videoId
+        val targetDuration = streams?.duration
+        val resumePosition = if (seekToPositionMs != 0L) {
+            seekToPositionMs
+        } else if (watchPositionsEnabled) {
+            withContext(Dispatchers.IO) {
+                UserDataRepositoryHelper.userDataRepository.getFromWatchHistory(targetVideoId)
+                    ?.metadata?.positionMillis?.takeUnless {
+                        DatabaseHelper.isVideoWatched(it, targetDuration)
+                    }
+            }
+        } else null
+
+        // Read before preparing, and verify the item again after the asynchronous lookup. This
+        // prevents a late resume query from seeking a newer playlist item to the previous item's
+        // saved position.
+        if (targetVideoId != videoId) return
         exoPlayer?.apply {
+            resumePosition?.let { seekTo(it) }
             // automatically start playback when using the audio player
             playWhenReady = PlayerHelper.playAutomatically || isAudioOnlyPlayer
             prepare()

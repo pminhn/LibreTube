@@ -151,7 +151,7 @@ class DownloadService : LifecycleService() {
         lifecycleScope.launch(coroutineContext) {
             val streams = loadStreamsInfo(videoId) ?: return@launch
 
-            storeVideoMetadata(videoId, streams)
+            storeVideoMetadata(videoId, streams, downloadData.audiobook)
 
             val downloadItems = streams.toDownloadItems(downloadData)
             for (downloadItem in downloadItems) {
@@ -180,7 +180,7 @@ class DownloadService : LifecycleService() {
         return streams
     }
 
-    private suspend fun storeVideoMetadata(videoId: String, streams: Streams) {
+    private suspend fun storeVideoMetadata(videoId: String, streams: Streams, audiobook: Boolean) {
         val thumbnailTargetPath = getDownloadPath(DownloadHelper.THUMBNAIL_DIR, videoId)
 
         val download = Download(
@@ -195,6 +195,7 @@ class DownloadService : LifecycleService() {
             streams.views,
             streams.likes,
             streams.dislikes,
+            audiobook = audiobook || (Database.downloadDao().findById(videoId)?.download?.audiobook == true),
         )
         Database.downloadDao().insertDownload(download)
 
@@ -295,10 +296,12 @@ class DownloadService : LifecycleService() {
         val sink = item.path.sink(StandardOpenOption.APPEND).buffer()
         var totalRead = item.path.fileSize()
         var numberOfTries = 0
+        var downloadCompleted = false
         while (downloadQueue[item.id] && !item.isFinished) {
             try {
                 when (val result = downloadProvider.downloadNextChunk(item, sink)) {
                     DownloadProgressResult.DownloadComplete -> {
+                        downloadCompleted = true
                         setPauseNotification(notificationBuilder, item, true)
                         _downloadFlow.emit(item.id to DownloadStatus.Completed)
                         downloadQueue[item.id] = false
@@ -341,6 +344,29 @@ class DownloadService : LifecycleService() {
         withContext(Dispatchers.IO) {
             sink.flush()
             sink.close()
+        }
+
+        if (downloadCompleted && item.downloadSize <= 0L) {
+            item.downloadSize = item.path.fileSize()
+            Database.downloadDao().updateDownloadItem(item)
+        }
+
+        if (item.type == FileType.AUDIO && downloadCompleted) {
+            val audiobook = withContext(Dispatchers.IO) {
+                Database.downloadDao().findById(item.videoId)?.download
+            }
+            if (audiobook?.audiobook == true) {
+                if (audiobook.deleteAfterTimestamp == -1L) {
+                    withContext(Dispatchers.IO) {
+                        com.github.libretube.helpers.AudiobookDownloadHelper.scheduleCleanup(item.videoId)
+                    }
+                }
+                sendBroadcast(
+                    Intent(com.github.libretube.helpers.AudiobookDownloadHelper.ACTION_AUDIO_DOWNLOAD_COMPLETED)
+                        .setPackage(packageName)
+                        .putExtra(com.github.libretube.helpers.AudiobookDownloadHelper.EXTRA_VIDEO_ID, item.videoId)
+                )
+            }
         }
 
         // start the next download if there are any remaining ones enqueued

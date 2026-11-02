@@ -31,6 +31,12 @@ interface DownloadDao {
     @Query("SELECT * FROM download WHERE videoId = :videoId")
     suspend fun findById(videoId: String): DownloadWithItems?
 
+    @Query("UPDATE download SET deleteAfterTimestamp = :timestamp WHERE videoId = :videoId")
+    suspend fun setDeleteAfter(videoId: String, timestamp: Long?)
+
+    @Query("UPDATE download SET audiobook = 1 WHERE videoId = :videoId")
+    suspend fun markAsAudiobook(videoId: String)
+
     @Query("SELECT EXISTS (SELECT * FROM download WHERE videoId = :videoId)")
     suspend fun exists(videoId: String): Boolean
 

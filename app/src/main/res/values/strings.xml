@@ -365,6 +365,8 @@
     <string name="alternative_pip_controls_summary">Show audio only and skip controls in PiP instead of forward and rewind</string>
     <string name="audio_only_mode">Audio only mode</string>
     <string name="audio_only_mode_summary">Turn LibreTube into a music player</string>
+    <string name="audiobook_mode">Audiobook mode</string>
+    <string name="audiobook_mode_summary">Play audio only, save progress every 10 seconds, and download the current and next playlist audio automatically</string>
     <string name="sleep_timer">Sleep timer</string>
     <string name="skip_silence">Skip silence</string>
     <string name="help">Help</string>

@@ -85,6 +85,13 @@ object DatabaseHolder {
         }
     }
 
+    private val MIGRATION_25_26 = object : Migration(25, 26) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE 'download' ADD COLUMN 'audiobook' INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE 'download' ADD COLUMN 'deleteAfterTimestamp' INTEGER DEFAULT NULL")
+        }
+    }
+
     @DeleteColumn(tableName = "downloadItem", columnName = "url")
     class MIGRATION_23_24 : AutoMigrationSpec
 
@@ -98,7 +105,8 @@ object DatabaseHolder {
                 MIGRATION_15_16,
                 MIGRATION_17_18,
                 MIGRATION_21_22,
-                MIGRATION_22_23
+                MIGRATION_22_23,
+                MIGRATION_25_26
             )
             .build()
     }

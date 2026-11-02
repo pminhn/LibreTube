@@ -29,6 +29,8 @@ import com.github.libretube.api.JsonHelper
 import com.github.libretube.api.obj.Segment
 import com.github.libretube.api.obj.StreamItem
 import com.github.libretube.constants.IntentData
+import com.github.libretube.db.DatabaseHolder.Database
+import com.github.libretube.db.obj.WatchPosition
 import com.github.libretube.enums.PlayerCommand
 import com.github.libretube.enums.PlayerEvent
 import com.github.libretube.enums.SbSkipOptions
@@ -64,6 +66,12 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
         private set
 
     val handler = Handler(Looper.getMainLooper())
+    private val watchPositionCheckpoint = object : Runnable {
+        override fun run() {
+            saveWatchPosition()
+            if (exoPlayer?.isPlaying == true) handler.postDelayed(this, WATCH_POSITION_CHECKPOINT_MS)
+        }
+    }
 
     // SponsorBlock Segment data
     private var sponsorBlockAutoSkip = true
@@ -83,7 +91,11 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
 
             // Start or pause watch position timer
             if (!isPlaying) {
+                handler.removeCallbacks(watchPositionCheckpoint)
                 saveWatchPosition()
+            } else {
+                handler.removeCallbacks(watchPositionCheckpoint)
+                handler.postDelayed(watchPositionCheckpoint, WATCH_POSITION_CHECKPOINT_MS)
             }
         }
 
@@ -341,8 +353,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     var isAudioOnlyPlayer: Boolean = false
 
     val watchPositionsEnabled
-        get() =
-            (PlayerHelper.watchPositionsAudio && isAudioOnlyPlayer) || (PlayerHelper.watchPositionsVideo && !isAudioOnlyPlayer)
+        get() = true
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? =
         mediaLibrarySession
@@ -435,7 +446,19 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     private fun saveWatchPosition() {
         if (isTransitioning || !watchPositionsEnabled || !::videoId.isInitialized) return
 
-        exoPlayer?.let { PlayerHelper.saveWatchPosition(it, videoId) }
+        exoPlayer?.let { player ->
+            val position = player.currentPosition
+            if (position <= 0L || player.duration == C.TIME_UNSET) return
+            val currentVideoId = videoId
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching {
+                    Database.watchPositionDao().insert(
+                        WatchPosition(videoId = currentVideoId, position = position)
+                    )
+                }
+            }
+            PlayerHelper.saveWatchPosition(player, currentVideoId)
+        }
     }
 
     override fun onMediaButtonEvent(
@@ -546,6 +569,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     }
 
     companion object {
+        private const val WATCH_POSITION_CHECKPOINT_MS = 10_000L
         private const val START_SERVICE_ACTION = "start_service_action"
         private const val STOP_SERVICE_ACTION = "stop_service_action"
         private const val RUN_PLAYER_COMMAND_ACTION = "run_player_command_action"

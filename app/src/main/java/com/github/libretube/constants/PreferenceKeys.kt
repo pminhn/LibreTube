@@ -17,6 +17,7 @@ object PreferenceKeys {
     const val NAVBAR_ITEMS = "navbar_items"
     const val START_FRAGMENT = "start_fragment"
     const val AUDIO_ONLY_MODE = "audio_only_mode"
+    const val AUDIOBOOK_MODE = "audiobook_mode"
 
     // Appearance
     const val THEME_MODE = "theme_toggle"

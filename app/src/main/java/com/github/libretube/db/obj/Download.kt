@@ -23,6 +23,8 @@ data class Download(
     val views: Long = 0,
     val likes: Long = 0,
     val dislikes: Long = -1,
+    @ColumnInfo(defaultValue = "0") val audiobook: Boolean = false,
+    @ColumnInfo(defaultValue = "NULL") val deleteAfterTimestamp: Long? = null,
 ) {
     fun toStreamItem() = StreamItem(
         url = videoId,
