@@ -22,7 +22,9 @@ object AudiobookDownloadHelper {
 
     /** Pick the smallest known audio file; if sizes are unavailable, use the lowest bitrate. */
     fun createDownloadData(videoId: String, streams: Streams): DownloadData? {
-        val available = streams.audioStreams.filter { !it.url.isNullOrBlank() }
+        val available = streams.audioStreams.filter {
+            !it.url.isNullOrBlank() && !it.format.isNullOrBlank() && !it.quality.isNullOrBlank()
+        }
         val selected = available.filter { it.contentLength > 0L }
             .minByOrNull { it.contentLength }
             ?: available.minByOrNull { it.bitrate ?: Int.MAX_VALUE }
