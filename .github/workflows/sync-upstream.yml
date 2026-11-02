@@ -1,0 +1,45 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-audiobook-mode
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out audiobook branch
+        uses: actions/checkout@v4
+        with:
+          ref: audiobook-mode
+          fetch-depth: 0
+
+      - name: Configure Git and fetch LibreTube
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/libre-tube/LibreTube.git
+          git fetch --no-tags upstream master
+
+      - name: Merge upstream master
+        id: merge
+        run: |
+          if git merge --no-edit upstream/master; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            echo "::error::Upstream changes conflict with audiobook-mode. No changes were pushed. Resolve the conflict manually, then rerun this workflow."
+            exit 1
+          fi
+
+      - name: Push synchronized branch
+        if: steps.merge.outputs.merged == 'true'
+        run: git push origin HEAD:audiobook-mode
