@@ -454,21 +454,41 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     }
 
     private fun saveWatchPosition() {
-        if (isTransitioning || !watchPositionsEnabled || !::videoId.isInitialized) return
+        if (isTransitioning || !watchPositionsEnabled || !::videoId.isInitialized) {
+            Log.d(
+                TAG(),
+                "Resume checkpoint skipped: transitioning=$isTransitioning, enabled=$watchPositionsEnabled, videoIdInitialized=${::videoId.isInitialized}"
+            )
+            return
+        }
 
         exoPlayer?.let { player ->
             val position = player.currentPosition
-            if (position <= 0L || player.duration == C.TIME_UNSET) return
+            if (position <= 0L || player.duration == C.TIME_UNSET) {
+                Log.d(
+                    TAG(),
+                    "Resume checkpoint skipped for $videoId: positionMs=$position, durationMs=${player.duration}, state=${player.playbackState}"
+                )
+                return
+            }
             val currentVideoId = videoId
+            Log.d(
+                TAG(),
+                "Saving resume checkpoint for $currentVideoId: positionMs=$position, durationMs=${player.duration}, playing=${player.isPlaying}, state=${player.playbackState}"
+            )
             CoroutineScope(Dispatchers.IO).launch {
                 runCatching {
                     Database.watchPositionDao().insert(
                         WatchPosition(videoId = currentVideoId, position = position)
                     )
+                }.onSuccess {
+                    Log.d(TAG(), "Saved local resume checkpoint for $currentVideoId at ${position}ms")
+                }.onFailure {
+                    Log.e(TAG(), "Failed to save local resume checkpoint for $currentVideoId", it)
                 }
             }
             PlayerHelper.saveWatchPosition(player, currentVideoId)
-        }
+        } ?: Log.w(TAG(), "Resume checkpoint skipped: ExoPlayer is null")
     }
 
     override fun onMediaButtonEvent(

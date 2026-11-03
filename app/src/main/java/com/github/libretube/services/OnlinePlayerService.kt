@@ -273,13 +273,31 @@ open class OnlinePlayerService : AbstractPlayerService() {
         val targetVideoId = videoId
         val targetDuration = streams?.duration
         val resumePosition = if (seekToPositionMs != 0L) {
+            android.util.Log.d(TAG(), "Resume position supplied by player navigation for $targetVideoId: ${seekToPositionMs}ms")
             seekToPositionMs
         } else if (watchPositionsEnabled) {
             withContext(Dispatchers.IO) {
-                UserDataRepositoryHelper.userDataRepository.getFromWatchHistory(targetVideoId)
-                    ?.metadata?.positionMillis?.takeUnless {
-                        DatabaseHelper.isVideoWatched(it, targetDuration)
-                    }
+                val localPosition = runCatching {
+                    Database.watchPositionDao().findById(targetVideoId)?.position
+                }.onFailure {
+                    android.util.Log.e(TAG(), "Could not read local resume checkpoint for $targetVideoId", it)
+                }.getOrNull()
+
+                val remotePosition = if (localPosition == null) {
+                    runCatching {
+                        UserDataRepositoryHelper.userDataRepository.getFromWatchHistory(targetVideoId)
+                            ?.metadata?.positionMillis
+                    }.onFailure {
+                        android.util.Log.w(TAG(), "Could not read watch-history resume position for $targetVideoId", it)
+                    }.getOrNull()
+                } else null
+
+                val selectedPosition = localPosition ?: remotePosition
+                android.util.Log.d(
+                    TAG(),
+                    "Resume lookup for $targetVideoId: localPositionMs=$localPosition, fallbackPositionMs=$remotePosition, durationSeconds=$targetDuration"
+                )
+                selectedPosition?.takeUnless { DatabaseHelper.isVideoWatched(it, targetDuration) }
             }
         } else null
 
@@ -287,6 +305,10 @@ open class OnlinePlayerService : AbstractPlayerService() {
         // prevents a late resume query from seeking a newer playlist item to the previous item's
         // saved position.
         if (targetVideoId != videoId) return
+        android.util.Log.d(
+            TAG(),
+            "Preparing $targetVideoId at resumePositionMs=$resumePosition (requested=${seekToPositionMs}ms, durationSeconds=$targetDuration, audioOnly=$isAudioOnlyPlayer)"
+        )
         exoPlayer?.apply {
             resumePosition?.let { seekTo(it) }
             // automatically start playback when using the audio player
