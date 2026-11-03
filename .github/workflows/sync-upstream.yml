@@ -22,24 +22,55 @@ jobs:
           ref: audiobook-mode
           fetch-depth: 0
 
-      - name: Configure Git and fetch LibreTube
+      - name: Configure Git and fetch branches
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/libre-tube/LibreTube.git
           git fetch --no-tags upstream master
+          git fetch --no-tags origin master audiobook-mode
 
-      - name: Merge upstream master
-        id: merge
+      - name: Merge upstream master into fork master
         run: |
+          git checkout -B master origin/master
           if git merge --no-edit upstream/master; then
-            echo "merged=true" >> "$GITHUB_OUTPUT"
+            git push origin HEAD:master
           else
             git merge --abort || true
-            echo "::error::Upstream changes conflict with audiobook-mode. No changes were pushed. Resolve the conflict manually, then rerun this workflow."
+            echo "::error::Upstream changes conflict with the fork's master branch. No master changes were pushed. Resolve the conflict manually, then rerun this workflow."
             exit 1
           fi
 
-      - name: Push synchronized branch
-        if: steps.merge.outputs.merged == 'true'
+      - name: Merge fork master into audiobook-mode
+        id: merge
+        run: |
+          git checkout audiobook-mode
+          before=$(git rev-parse HEAD)
+          if git merge --no-edit master; then
+            after=$(git rev-parse HEAD)
+            if [ "$before" != "$after" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            git merge --abort || true
+            echo "::error::Fork master changes conflict with audiobook-mode. Master was synced, but audiobook-mode was not changed. Resolve the conflict manually, then rerun this workflow."
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        if: steps.merge.outputs.changed == 'true'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Build debug app after merge
+        if: steps.merge.outputs.changed == 'true'
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Push synchronized audiobook branch
+        if: steps.merge.outputs.changed == 'true'
         run: git push origin HEAD:audiobook-mode
