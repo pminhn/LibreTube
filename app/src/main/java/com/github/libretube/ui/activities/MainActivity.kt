@@ -242,6 +242,7 @@ class MainActivity : AbstractPlayerHostActivity() {
         setupSubscriptionsBadge()
 
         loadIntentData()
+        resumeSavedQueueFromLauncherIntent()
 
         showUserInfoDialogIfNeeded()
     }
@@ -691,6 +692,56 @@ class MainActivity : AbstractPlayerHostActivity() {
         PlayingQueueSheet().show(supportFragmentManager)
     }
 
+    private fun resumeSavedQueueFromLauncherIntent() {
+        val launchIntent = intent ?: return
+        if (launchIntent.action != Intent.ACTION_MAIN ||
+            launchIntent.categories?.contains(Intent.CATEGORY_LAUNCHER) != true ||
+            launchIntent.hasExtra(IntentData.videoId) ||
+            launchIntent.getBooleanExtra(IntentData.maximizePlayer, false) ||
+            launchIntent.hasExtra(IntentData.fragmentToOpen) ||
+            launchIntent.hasExtra(IntentData.query) ||
+            launchIntent.getBooleanExtra(IntentData.OPEN_DOWNLOADS, false)
+        ) {
+            android.util.Log.d("QueueResume", "Startup queue resume skipped: launch intent is not a plain launcher intent (action=${launchIntent.action})")
+            return
+        }
+
+        if (!PlayingQueue.shouldResumeOnStartup) {
+            android.util.Log.d("QueueResume", "Startup queue resume skipped: saved queue is not marked resumable")
+            return
+        }
+        val currentVideoId = PlayingQueue.getCurrent()?.url?.toID()
+        if (currentVideoId == null) {
+            android.util.Log.w("QueueResume", "Startup queue resume skipped: no current item; queueSize=${PlayingQueue.size()}, mode=${PlayingQueue.queueMode}")
+            return
+        }
+        android.util.Log.i("QueueResume", "Restoring saved queue: videoId=$currentVideoId, index=${PlayingQueue.currentIndex()}, size=${PlayingQueue.size()}, mode=${PlayingQueue.queueMode}")
+
+        // A restored audio player fragment will restart the service if its media session is empty.
+        if (runOnAudioPlayerFragment {
+                android.util.Log.d("QueueResume", "Found restored audio player fragment; asking it to reconnect to saved queue")
+                resumeSavedQueueIfNeeded()
+                true
+            }
+        ) return
+
+        // A restored video player fragment reconnects to and restores its own media session.
+        if (runOnPlayerFragment {
+                android.util.Log.d("QueueResume", "Found restored video player fragment; leaving it to reconnect to its media session")
+                true
+            }) return
+
+        android.util.Log.i("QueueResume", "Navigating to saved queue item $currentVideoId")
+        NavigationHelper.navigateVideo(
+            this,
+            PlayerData(
+                videoId = currentVideoId,
+                keepQueue = true,
+                isOffline = PlayingQueue.queueMode == PlayingQueueMode.OFFLINE
+            )
+        )
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
 
@@ -704,6 +755,7 @@ class MainActivity : AbstractPlayerHostActivity() {
         super.onNewIntent(intent)
         this.intent = intent
         loadIntentData()
+        resumeSavedQueueFromLauncherIntent()
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {

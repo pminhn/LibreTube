@@ -89,6 +89,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             super.onIsPlayingChanged(isPlaying)
+            android.util.Log.i(TAG(), "Playback isPlaying=$isPlaying for videoId=${videoId.takeIf { ::videoId.isInitialized }}, state=${exoPlayer?.playbackState}, positionMs=${exoPlayer?.currentPosition}")
 
             // Start or pause watch position timer
             if (!isPlaying) {
@@ -101,6 +102,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            android.util.Log.e(TAG(), "Player error: videoId=${videoId.takeIf { ::videoId.isInitialized }}, queueIndex=${PlayingQueue.currentIndex()}, errorCode=${error.errorCodeName}", error)
             // show a toast on errors
             toastFromMainThread(error.localizedMessage.orEmpty())
         }
@@ -110,10 +112,15 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
 
             when (playbackState) {
                 Player.STATE_ENDED -> {
+                    android.util.Log.i(TAG(), "Playback ended: videoId=${videoId.takeIf { ::videoId.isInitialized }}, queueIndex=${PlayingQueue.currentIndex()}, queueSize=${PlayingQueue.size()}, hasNext=${PlayingQueue.hasNext()}")
                     saveWatchPosition()
+                    if (!PlayingQueue.hasNext()) {
+                        PlayingQueue.setShouldResumeOnStartup(false)
+                    }
                 }
 
                 Player.STATE_READY -> {
+                    android.util.Log.i(TAG(), "Player ready: videoId=${videoId.takeIf { ::videoId.isInitialized }}, positionMs=${exoPlayer?.currentPosition}, durationMs=${exoPlayer?.duration}, isPlaying=${exoPlayer?.isPlaying}")
                     isTransitioning = false
                 }
             }
@@ -128,20 +135,28 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     ): ListenableFuture<SessionResult> {
         when (customCommand.customAction) {
             START_SERVICE_ACTION -> {
+                android.util.Log.i(TAG(), "Playback start/resume command received: service=${javaClass.simpleName}, argumentKeys=${args.keySet()}")
                 PlayingQueue.queueMode =
                     if (isOfflinePlayer) PlayingQueueMode.OFFLINE else PlayingQueueMode.ONLINE
 
                 CoroutineScope(Dispatchers.IO).launch {
                     onServiceCreated(args)
+                    android.util.Log.i(TAG(), "Playback service initialized: activeVideoId=${videoId.takeIf { ::videoId.isInitialized }}, queueIndex=${PlayingQueue.currentIndex()}, queueSize=${PlayingQueue.size()}, queueMode=${PlayingQueue.queueMode}")
                     withContext(Dispatchers.Main) {
                         updateNotification()
                     }
 
-                    if (::videoId.isInitialized) startPlayback()
+                    if (::videoId.isInitialized) {
+                        android.util.Log.i(TAG(), "Starting playback pipeline for $videoId")
+                        startPlayback()
+                    } else {
+                        android.util.Log.e(TAG(), "Playback pipeline not started: service initialization did not set videoId")
+                    }
                 }
             }
 
             STOP_SERVICE_ACTION -> {
+                PlayingQueue.setShouldResumeOnStartup(false)
                 onDestroy()
             }
 
@@ -263,6 +278,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
      */
     @CallSuper
     open fun navigateVideo(videoId: String) {
+        PlayingQueue.setShouldResumeOnStartup(true)
         val previousVideoId = this.videoId.takeIf { this::videoId.isInitialized }
         if (previousVideoId != null) {
             CoroutineScope(Dispatchers.IO).launch {
@@ -338,6 +354,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
             }
 
             PlayerEvent.Stop -> {
+                PlayingQueue.setShouldResumeOnStartup(false)
                 onDestroy()
             }
 

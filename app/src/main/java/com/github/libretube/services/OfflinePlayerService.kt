@@ -84,6 +84,7 @@ open class OfflinePlayerService : AbstractPlayerService() {
         isAudioOnlyPlayer = args.getBoolean(IntentData.audioOnly, false)
 
         if (!playerData.keepQueue) PlayingQueue.clear()
+        PlayingQueue.setShouldResumeOnStartup(true)
 
         this.videoId = if (playerData.shuffle) {
             runBlocking(Dispatchers.IO) {

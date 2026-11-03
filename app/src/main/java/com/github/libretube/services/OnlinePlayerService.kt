@@ -32,6 +32,7 @@ import com.github.libretube.constants.IntentData
 import com.github.libretube.db.DatabaseHelper
 import com.github.libretube.db.DatabaseHolder.Database
 import com.github.libretube.enums.FileType
+import com.github.libretube.enums.SyncServerType
 import com.github.libretube.extensions.TAG
 import com.github.libretube.extensions.parcelable
 import com.github.libretube.extensions.setMetadata
@@ -88,17 +89,28 @@ open class OnlinePlayerService : AbstractPlayerService() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val completedVideoId = intent?.getStringExtra(AudiobookDownloadHelper.EXTRA_VIDEO_ID)
                 ?: return
-            if (completedVideoId != videoId || !isAudioOnlyPlayer || !isAudiobookModeEnabled()) return
+            if (completedVideoId != videoId || !isAudioOnlyPlayer || !isAudiobookModeEnabled()) {
+                Log.d(TAG(), "Ignoring completed audio download: downloadedVideoId=$completedVideoId, activeVideoId=$videoId, audioOnly=$isAudioOnlyPlayer, audiobookMode=${isAudiobookModeEnabled()}")
+                return
+            }
+            Log.i(TAG(), "Audio download completed for active audiobook $completedVideoId; checking file for seamless handoff")
 
             scope.launch {
                 val item = withContext(Dispatchers.IO) {
                     Database.downloadDao().findById(completedVideoId)?.downloadItems
                         ?.firstOrNull { it.type == FileType.AUDIO && it.isFinished && it.path.exists() }
-                } ?: return@launch
+                } ?: run {
+                    Log.w(TAG(), "Audio handoff skipped for $completedVideoId: completed audio file was not found in the download database")
+                    return@launch
+                }
 
-                val player = exoPlayer ?: return@launch
+                val player = exoPlayer ?: run {
+                    Log.w(TAG(), "Audio handoff skipped for $completedVideoId: ExoPlayer is unavailable")
+                    return@launch
+                }
                 val position = player.currentPosition
                 val wasPlaying = player.playWhenReady
+                Log.i(TAG(), "Switching audiobook $completedVideoId to downloaded audio at ${position}ms; playWhenReady=$wasPlaying")
                 val mediaItem = MediaItem.Builder()
                     .setUri(Uri.fromFile(item.path.toFile()))
                     .apply { streams?.let { setMetadata(it, completedVideoId) } }
@@ -168,6 +180,7 @@ open class OnlinePlayerService : AbstractPlayerService() {
         startTimestampSeconds = playerData.timestamp
 
         if (!playerData.keepQueue) PlayingQueue.clear()
+        PlayingQueue.setShouldResumeOnStartup(true)
 
         exoPlayer?.addListener(playerListener)
         trackSelector?.updateParameters {
@@ -193,11 +206,14 @@ open class OnlinePlayerService : AbstractPlayerService() {
                         DeArrowUtil.deArrowStreams(it, videoId)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG(), e.stackTraceToString())
+                    Log.e(TAG(), "Could not load streams for $videoId", e)
                     toastFromMainDispatcher(e.localizedMessage.orEmpty())
                     return@withContext null
                 }
-            } ?: return@launch
+            } ?: run {
+                Log.e(TAG(), "Playback stopped before media preparation: stream lookup returned no streams for $videoId")
+                return@launch
+            }
 
             streams?.toStreamItem(videoId)?.let {
                 // save the current stream to the queue
@@ -283,7 +299,10 @@ open class OnlinePlayerService : AbstractPlayerService() {
                     android.util.Log.e(TAG(), "Could not read local resume checkpoint for $targetVideoId", it)
                 }.getOrNull()
 
-                val remotePosition = if (localPosition == null) {
+                val remotePosition = if (
+                    localPosition == null &&
+                    UserDataRepositoryHelper.syncServerType == SyncServerType.LIBRETUBE
+                ) {
                     runCatching {
                         UserDataRepositoryHelper.userDataRepository.getFromWatchHistory(targetVideoId)
                             ?.metadata?.positionMillis
@@ -295,7 +314,7 @@ open class OnlinePlayerService : AbstractPlayerService() {
                 val selectedPosition = localPosition ?: remotePosition
                 android.util.Log.d(
                     TAG(),
-                    "Resume lookup for $targetVideoId: localPositionMs=$localPosition, fallbackPositionMs=$remotePosition, durationSeconds=$targetDuration"
+                    "Resume lookup for $targetVideoId: localPositionMs=$localPosition, remoteFallbackEnabled=${UserDataRepositoryHelper.syncServerType == SyncServerType.LIBRETUBE}, remotePositionMs=$remotePosition, durationSeconds=$targetDuration"
                 )
                 selectedPosition?.takeUnless { DatabaseHelper.isVideoWatched(it, targetDuration) }
             }
@@ -304,7 +323,10 @@ open class OnlinePlayerService : AbstractPlayerService() {
         // Read before preparing, and verify the item again after the asynchronous lookup. This
         // prevents a late resume query from seeking a newer playlist item to the previous item's
         // saved position.
-        if (targetVideoId != videoId) return
+        if (targetVideoId != videoId) {
+            android.util.Log.w(TAG(), "Aborting stale media preparation for $targetVideoId; active video changed to $videoId")
+            return
+        }
         android.util.Log.d(
             TAG(),
             "Preparing $targetVideoId at resumePositionMs=$resumePosition (requested=${seekToPositionMs}ms, durationSeconds=$targetDuration, audioOnly=$isAudioOnlyPlayer)"
@@ -314,7 +336,7 @@ open class OnlinePlayerService : AbstractPlayerService() {
             // automatically start playback when using the audio player
             playWhenReady = PlayerHelper.playAutomatically || isAudioOnlyPlayer
             prepare()
-        }
+        } ?: android.util.Log.e(TAG(), "Could not prepare $targetVideoId: ExoPlayer is unavailable")
     }
 
     private suspend fun getSponsorBlockSegments(): List<Segment> {
@@ -338,6 +360,7 @@ open class OnlinePlayerService : AbstractPlayerService() {
      */
     private fun setStreamSource() {
         val streams = streams ?: return
+        android.util.Log.i(TAG(), "Selecting online media source for $videoId: audioOnly=$isAudioOnlyPlayer, audioStreamCount=${streams.audioStreams.size}, videoStreamCount=${streams.videoStreams.size}, hasSabr=${streams.serverAbrStreamingUrl != null}, hasHls=${streams.hls != null}")
 
         when {
             // SABR

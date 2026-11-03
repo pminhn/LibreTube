@@ -61,6 +61,7 @@ import com.github.libretube.ui.sheets.SleepTimerSheet
 import com.github.libretube.ui.sheets.VideoOptionsBottomSheet
 import com.github.libretube.util.DataSaverMode
 import com.github.libretube.util.PlayingQueue
+import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 
@@ -440,6 +441,8 @@ class AudioPlayerFragment : Fragment(R.layout.fragment_audio_player), AudioPlaye
     }
 
     private fun handleServiceConnection() {
+        resumeSavedQueueIfNeeded()
+
         playerController?.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 super.onIsPlayingChanged(isPlaying)
@@ -469,6 +472,45 @@ class AudioPlayerFragment : Fragment(R.layout.fragment_audio_player), AudioPlaye
 
         updatePlayPauseButton()
         initializeSeekBar()
+    }
+
+    fun resumeSavedQueueIfNeeded() {
+        val controller = playerController
+        if (controller == null) {
+            android.util.Log.w("QueueResume", "Audio fragment cannot resume saved queue: media controller is not connected")
+            return
+        }
+        if (controller.currentMediaItem != null) {
+            android.util.Log.d("QueueResume", "Audio fragment already has a media item (${controller.currentMediaItem?.mediaId}); no queue restart needed")
+            return
+        }
+        if (!PlayingQueue.shouldResumeOnStartup) {
+            android.util.Log.d("QueueResume", "Audio fragment has no media item and saved queue is not marked resumable")
+            return
+        }
+
+        val currentVideoId = PlayingQueue.getCurrent()?.url?.toID()
+        if (currentVideoId == null) {
+            android.util.Log.w("QueueResume", "Audio fragment cannot resume saved queue: no current queue item")
+            return
+        }
+        android.util.Log.i("QueueResume", "Requesting audio service restart for saved queue item $currentVideoId; offline=$isOffline")
+        val result = controller.sendCustomCommand(
+            AbstractPlayerService.startServiceCommand,
+            bundleOf(
+                IntentData.playerData to PlayerData(
+                    videoId = currentVideoId,
+                    keepQueue = true,
+                    isOffline = isOffline
+                ),
+                IntentData.audioOnly to true
+            )
+        )
+        result.addListener({
+            runCatching { result.get() }
+                .onSuccess { android.util.Log.i("QueueResume", "Audio service restart command completed for $currentVideoId: ${it.resultCode}") }
+                .onFailure { android.util.Log.e("QueueResume", "Audio service restart command failed for $currentVideoId", it) }
+        }, MoreExecutors.directExecutor())
     }
 
     override fun onDestroyView() {

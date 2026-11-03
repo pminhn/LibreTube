@@ -23,7 +23,8 @@ import java.util.Collections
 private data class PersistedQueue(
     val streams: List<StreamItem>,
     val currentVideoId: String?,
-    val mode: PlayingQueueMode
+    val mode: PlayingQueueMode,
+    val shouldResumeOnStartup: Boolean = true
 )
 
 object PlayingQueue {
@@ -34,6 +35,13 @@ object PlayingQueue {
     private val queueJobs = mutableListOf<Job>()
     private var restored = false
     private var storedQueueMode = PlayingQueueMode.ONLINE
+    private var storedShouldResumeOnStartup = true
+
+    val shouldResumeOnStartup: Boolean
+        get() {
+            restoreIfNeeded()
+            return storedShouldResumeOnStartup
+        }
 
     /**
      * Current use case of the queue. Do NOT add any offline videos while the [queueMode] is online
@@ -70,8 +78,15 @@ object PlayingQueue {
         if (!preservePersisted) {
             queue.clear()
             currentStream = null
+            storedShouldResumeOnStartup = false
             persist()
         }
+    }
+
+    fun setShouldResumeOnStartup(shouldResume: Boolean) {
+        restoreIfNeeded()
+        storedShouldResumeOnStartup = shouldResume
+        persist()
     }
 
     /**
@@ -207,23 +222,36 @@ object PlayingQueue {
         restored = true
         val savedState = runCatching {
             PreferenceHelper.getString(PreferenceKeys.PLAY_QUEUE_STATE, "")
+        }.onFailure {
+            android.util.Log.e("PlayingQueue", "Could not read saved queue preference", it)
         }.getOrDefault("")
+        if (savedState.isBlank()) {
+            android.util.Log.i("PlayingQueue", "No saved play queue found")
+            return
+        }
         val state = runCatching { JsonHelper.json.decodeFromString<PersistedQueue>(savedState) }
+            .onFailure { android.util.Log.e("PlayingQueue", "Could not decode saved play queue", it) }
             .getOrNull() ?: return
         queue.addAll(state.streams)
         currentStream = queue.firstOrNull { it.url?.toID() == state.currentVideoId?.toID() }
         storedQueueMode = state.mode
+        storedShouldResumeOnStartup = state.shouldResumeOnStartup
+        android.util.Log.i(
+            "PlayingQueue",
+            "Restored queue: size=${queue.size}, savedCurrentVideoId=${state.currentVideoId}, matchedCurrent=${currentStream?.url?.toID()}, mode=$storedQueueMode, shouldResume=$storedShouldResumeOnStartup"
+        )
     }
 
     private fun persist() {
         val state = PersistedQueue(
             streams = queue.toList(),
             currentVideoId = currentStream?.url?.toID(),
-            mode = storedQueueMode
+            mode = storedQueueMode,
+            shouldResumeOnStartup = storedShouldResumeOnStartup
         )
         runCatching {
             PreferenceHelper.putString(PreferenceKeys.PLAY_QUEUE_STATE, JsonHelper.json.encodeToString(state))
-        }
+        }.onFailure { android.util.Log.e("PlayingQueue", "Could not persist play queue", it) }
     }
 
     /**
