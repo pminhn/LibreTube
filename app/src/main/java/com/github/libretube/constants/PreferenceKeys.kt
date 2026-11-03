@@ -18,6 +18,7 @@ object PreferenceKeys {
     const val START_FRAGMENT = "start_fragment"
     const val AUDIO_ONLY_MODE = "audio_only_mode"
     const val AUDIOBOOK_MODE = "audiobook_mode"
+    const val PLAY_QUEUE_STATE = "play_queue_state"
 
     // Appearance
     const val THEME_MODE = "theme_toggle"

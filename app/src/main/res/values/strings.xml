@@ -300,6 +300,7 @@
     <string name="time_code">Time code (seconds)</string>
     <string name="added_to_playlist">Added to playlist %1$s</string>
     <string name="queue">Queue</string>
+    <string name="play_queue">Play queue</string>
     <string name="sb_custom_colors_summary">Toggles custom color segments for SponsorBlock segments</string>
     <string name="sb_custom_colors">Custom segment colors</string>
     <string name="color">Color</string>

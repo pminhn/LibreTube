@@ -40,6 +40,7 @@ import com.github.libretube.extensions.toID
 import com.github.libretube.extensions.toastFromMainThread
 import com.github.libretube.extensions.updateParameters
 import com.github.libretube.helpers.PlayerHelper
+import com.github.libretube.helpers.AudiobookDownloadHelper
 import com.github.libretube.helpers.PlayerHelper.getCurrentSegment
 import com.github.libretube.ui.activities.MainActivity
 import com.github.libretube.util.DefaultTrackSelectorWithAudioQualitySupport
@@ -262,6 +263,15 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
      */
     @CallSuper
     open fun navigateVideo(videoId: String) {
+        val previousVideoId = this.videoId.takeIf { this::videoId.isInitialized }
+        if (previousVideoId != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                AudiobookDownloadHelper.cancelCleanup(videoId)
+                if (previousVideoId != videoId && PlayingQueue.isForwardJump(previousVideoId, videoId)) {
+                    AudiobookDownloadHelper.scheduleCleanup(previousVideoId)
+                }
+            }
+        }
         sponsorBlockSegments = emptyList()
         exoPlayer?.clearMediaItems()
 
@@ -517,7 +527,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
                 mediaLibrarySession = null
             }
 
-            PlayingQueue.clear()
+            PlayingQueue.clear(preservePersisted = true)
 
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
             stopSelf()

@@ -1,6 +1,7 @@
 package com.github.libretube.util
 
 import androidx.media3.common.Player
+import com.github.libretube.api.JsonHelper
 import com.github.libretube.api.MediaServiceRepository
 import com.github.libretube.api.PlaylistsHelper
 import com.github.libretube.api.obj.StreamItem
@@ -8,10 +9,22 @@ import com.github.libretube.enums.PlaylistType
 import com.github.libretube.extensions.move
 import com.github.libretube.extensions.runCatchingIO
 import com.github.libretube.extensions.toID
+import com.github.libretube.constants.PreferenceKeys
 import com.github.libretube.helpers.PlayerHelper
+import com.github.libretube.helpers.PreferenceHelper
 import com.github.libretube.util.PlayingQueue.queueMode
 import kotlinx.coroutines.Job
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import java.util.Collections
+
+@Serializable
+private data class PersistedQueue(
+    val streams: List<StreamItem>,
+    val currentVideoId: String?,
+    val mode: PlayingQueueMode
+)
 
 object PlayingQueue {
     // queue is a synchronized list to be safely accessible from different coroutine threads
@@ -19,12 +32,23 @@ object PlayingQueue {
     private var currentStream: StreamItem? = null
 
     private val queueJobs = mutableListOf<Job>()
+    private var restored = false
+    private var storedQueueMode = PlayingQueueMode.ONLINE
 
     /**
      * Current use case of the queue. Do NOT add any offline videos while the [queueMode] is online
      * or vice versa.
      */
-    var queueMode: PlayingQueueMode = PlayingQueueMode.ONLINE
+    var queueMode: PlayingQueueMode
+        get() {
+            restoreIfNeeded()
+            return storedQueueMode
+        }
+        set(value) {
+            restoreIfNeeded()
+            storedQueueMode = value
+            persist()
+        }
 
     // wrapper around PlayerHelper#repeatMode for compatibility
     var repeatMode: Int
@@ -40,10 +64,14 @@ object PlayingQueue {
         queueJobs.clear()
     }
 
-    fun clear() {
+    fun clear(preservePersisted: Boolean = false) {
+        restoreIfNeeded()
         clearJobs()
-        queue.clear()
-        currentStream = null
+        if (!preservePersisted) {
+            queue.clear()
+            currentStream = null
+            persist()
+        }
     }
 
     /**
@@ -63,22 +91,27 @@ object PlayingQueue {
      * @param skipExisting Whether to skip the [streamItem] if it's already part of the queue
      */
     fun add(vararg streamItem: StreamItem, skipExisting: Boolean = false) = synchronized(queue) {
+        restoreIfNeeded()
         for (stream in streamItem) {
             if ((skipExisting && contains(stream)) || stream.title.isNullOrBlank()) continue
 
             queue.remove(stream)
             queue.add(stream)
         }
+        persist()
     }
 
     fun addAsNext(streamItem: StreamItem) = synchronized(queue) {
+        restoreIfNeeded()
         if (currentStream == streamItem) return
         if (queue.contains(streamItem)) queue.remove(streamItem)
         queue.add(currentIndex() + 1, streamItem)
+        persist()
     }
 
     // return the next item, or if repeating enabled and no video left, the first one of the queue
     fun getNext(): String? = synchronized(queue) {
+        restoreIfNeeded()
         val nextItem = queue.getOrNull(currentIndex() + 1)
         if (nextItem != null) return nextItem.url?.toID()
 
@@ -89,6 +122,7 @@ object PlayingQueue {
 
     // return the previous item, or if repeating enabled and no video left, the last one of the queue
     fun getPrev(): String? = synchronized(queue) {
+        restoreIfNeeded()
         val prevItem = queue.getOrNull(currentIndex() - 1)
         if (prevItem != null) return prevItem.url?.toID()
 
@@ -102,45 +136,94 @@ object PlayingQueue {
     fun hasNext() = getNext() != null
 
     fun updateCurrent(streamItem: StreamItem) = synchronized(queue) {
+        restoreIfNeeded()
         currentStream = streamItem
 
         if (!contains(streamItem)) add(streamItem)
+        persist()
     }
 
-    fun isNotEmpty() = queue.isNotEmpty()
+    fun isNotEmpty(): Boolean { restoreIfNeeded(); return queue.isNotEmpty() }
 
-    fun isEmpty() = queue.isEmpty()
+    fun isEmpty(): Boolean { restoreIfNeeded(); return queue.isEmpty() }
 
-    fun size() = queue.size
+    fun size(): Int { restoreIfNeeded(); return queue.size }
 
     fun currentIndex(): Int = synchronized(queue) {
+        restoreIfNeeded()
         return queue.indexOfFirst {
             it.url?.toID() == currentStream?.url?.toID()
         }.takeIf { it >= 0 } ?: 0
     }
 
-    fun getCurrent(): StreamItem? = currentStream
+    fun getCurrent(): StreamItem? { restoreIfNeeded(); return currentStream }
 
     fun contains(streamItem: StreamItem) = synchronized(queue) {
+        restoreIfNeeded()
         queue.any { it.url?.toID() == streamItem.url?.toID() }
     }
 
     // only returns a copy of the queue, no write access
-    fun getStreams() = queue.toList()
+    fun getStreams(): List<StreamItem> { restoreIfNeeded(); return queue.toList() }
 
     fun setStreams(streams: List<StreamItem>) = synchronized(queue) {
+        restoreIfNeeded()
         queue.clear()
 
         queue.addAll(streams)
+        if (currentStream?.url?.toID() !in streams.map { it.url?.toID() }) currentStream = null
+        persist()
     }
 
     fun remove(index: Int) = synchronized(queue) {
+        restoreIfNeeded()
         queue.removeAt(index)
+        persist()
         return@synchronized
     }
 
     fun move(from: Int, to: Int) = synchronized(queue) {
+        restoreIfNeeded()
         queue.move(from, to)
+        persist()
+    }
+
+    fun indexOf(videoId: String): Int {
+        restoreIfNeeded()
+        return queue.indexOfFirst { it.url?.toID() == videoId.toID() }
+    }
+
+    fun isForwardJump(fromVideoId: String, toVideoId: String): Boolean {
+        restoreIfNeeded()
+        val fromIndex = indexOf(fromVideoId)
+        val toIndex = indexOf(toVideoId)
+        if (fromIndex < 0 || toIndex < 0) return false
+        return toIndex > fromIndex ||
+            (repeatMode == Player.REPEAT_MODE_ALL && toIndex == 0 && fromIndex == queue.lastIndex)
+    }
+
+    private fun restoreIfNeeded() {
+        if (restored) return
+        restored = true
+        val savedState = runCatching {
+            PreferenceHelper.getString(PreferenceKeys.PLAY_QUEUE_STATE, "")
+        }.getOrDefault("")
+        val state = runCatching { JsonHelper.json.decodeFromString<PersistedQueue>(savedState) }
+            .getOrNull() ?: return
+        queue.addAll(state.streams)
+        currentStream = queue.firstOrNull { it.url?.toID() == state.currentVideoId?.toID() }
+        storedQueueMode = state.mode
+    }
+
+    private fun persist() {
+        val state = PersistedQueue(
+            streams = queue.toList(),
+            currentVideoId = currentStream?.url?.toID(),
+            mode = storedQueueMode
+        )
+        runCatching {
+            PreferenceHelper.putString(PreferenceKeys.PLAY_QUEUE_STATE, JsonHelper.json.encodeToString(state))
+        }
     }
 
     /**
@@ -235,6 +318,7 @@ object PlayingQueue {
     }
 }
 
+@Serializable
 enum class PlayingQueueMode {
     ONLINE,
     OFFLINE

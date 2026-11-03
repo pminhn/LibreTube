@@ -44,8 +44,12 @@ import com.github.libretube.db.obj.SearchHistoryItem
 import com.github.libretube.enums.ImportFormat
 import com.github.libretube.enums.SearchType
 import com.github.libretube.enums.TopLevelDestination
+import com.github.libretube.util.PlayingQueue
+import com.github.libretube.util.PlayingQueueMode
 import com.github.libretube.extensions.anyChildFocused
+import com.github.libretube.extensions.toID
 import com.github.libretube.helpers.ImportHelper
+import com.github.libretube.helpers.AudiobookDownloadHelper
 import com.github.libretube.helpers.IntentHelper
 import com.github.libretube.helpers.NavBarHelper
 import com.github.libretube.helpers.NavigationHelper
@@ -57,6 +61,7 @@ import com.github.libretube.ui.dialogs.ErrorDialog
 import com.github.libretube.ui.dialogs.ImportTempPlaylistDialog
 import com.github.libretube.ui.extensions.onSystemInsets
 import com.github.libretube.ui.fragments.DownloadsFragment
+import com.github.libretube.ui.sheets.PlayingQueueSheet
 import com.github.libretube.ui.models.DownloadsViewModel
 import com.github.libretube.ui.models.PlaylistViewModel
 import com.github.libretube.ui.models.SearchViewModel
@@ -630,6 +635,12 @@ class MainActivity : AbstractPlayerHostActivity() {
     }
 
     private fun navigateToBottomSelectedItem(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_play_queue) {
+            openPlayQueue()
+            deselectBottomBarItems()
+            return true
+        }
+
         if (item.itemId == R.id.subscriptionsFragment) {
             binding.bottomNav.removeBadge(R.id.subscriptionsFragment)
         }
@@ -638,6 +649,46 @@ class MainActivity : AbstractPlayerHostActivity() {
         searchItem.collapseActionView()
 
         return item.onNavDestinationSelected(navController)
+    }
+
+    private fun openPlayQueue() {
+        if (runOnAudioPlayerFragment {
+                PlayingQueueSheet().show(childFragmentManager)
+                true
+            }
+        ) return
+
+        if (runOnPlayerFragment { true }) {
+            // The active video player already owns the result listener on this FragmentManager.
+            PlayingQueueSheet().show(supportFragmentManager)
+            return
+        }
+
+        supportFragmentManager.setFragmentResultListener(
+            PlayingQueueSheet.PLAYING_QUEUE_REQUEST_KEY,
+            this
+        ) { _, result ->
+            val videoId = result.getString(IntentData.videoId) ?: return@setFragmentResultListener
+            val previousVideoId = PlayingQueue.getCurrent()?.url?.toID()
+            lifecycleScope.launch(Dispatchers.IO) {
+                AudiobookDownloadHelper.cancelCleanup(videoId)
+                if (previousVideoId != null &&
+                    previousVideoId != videoId &&
+                    PlayingQueue.isForwardJump(previousVideoId, videoId)
+                ) {
+                    AudiobookDownloadHelper.scheduleCleanup(previousVideoId)
+                }
+            }
+            NavigationHelper.navigateVideo(
+                this,
+                PlayerData(
+                    videoId = videoId,
+                    keepQueue = true,
+                    isOffline = PlayingQueue.queueMode == PlayingQueueMode.OFFLINE
+                )
+            )
+        }
+        PlayingQueueSheet().show(supportFragmentManager)
     }
 
     override fun onUserLeaveHint() {

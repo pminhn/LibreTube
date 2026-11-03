@@ -25,6 +25,7 @@ import com.github.libretube.extensions.setMetadata
 import com.github.libretube.extensions.toAndroidUri
 import com.github.libretube.extensions.updateParameters
 import com.github.libretube.helpers.PlayerHelper
+import com.github.libretube.helpers.AudiobookDownloadHelper
 import com.github.libretube.parcelable.PlayerData
 import com.github.libretube.repo.UserDataRepositoryHelper
 import com.github.libretube.ui.activities.MainActivity
@@ -55,6 +56,9 @@ open class OfflinePlayerService : AbstractPlayerService() {
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                scope.launch(Dispatchers.IO) {
+                    AudiobookDownloadHelper.scheduleCleanup(videoId)
+                }
                 playNextVideo()
             }
 
@@ -79,7 +83,7 @@ open class OfflinePlayerService : AbstractPlayerService() {
         noInternetService = args.getBoolean(IntentData.noInternet, false)
         isAudioOnlyPlayer = args.getBoolean(IntentData.audioOnly, false)
 
-        PlayingQueue.clear()
+        if (!playerData.keepQueue) PlayingQueue.clear()
 
         this.videoId = if (playerData.shuffle) {
             runBlocking(Dispatchers.IO) {
@@ -100,7 +104,7 @@ open class OfflinePlayerService : AbstractPlayerService() {
             setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, isAudioOnlyPlayer)
         }
 
-        fillQueue()
+        if (!playerData.keepQueue || PlayingQueue.isEmpty()) fillQueue()
     }
 
     override fun getIntentActivity(): Class<*> {

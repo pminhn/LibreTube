@@ -114,10 +114,8 @@ open class OnlinePlayerService : AbstractPlayerService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 Player.STATE_ENDED -> {
-                    if (isAudiobookModeEnabled()) {
-                        scope.launch(Dispatchers.IO) {
-                            AudiobookDownloadHelper.scheduleCleanup(videoId)
-                        }
+                    scope.launch(Dispatchers.IO) {
+                        AudiobookDownloadHelper.scheduleCleanup(videoId)
                     }
                     if (!isTransitioning) playNextVideo(relatedStreams = streams?.relatedStreams)
                 }

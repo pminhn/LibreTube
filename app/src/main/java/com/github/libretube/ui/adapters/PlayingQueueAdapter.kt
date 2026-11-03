@@ -43,17 +43,9 @@ class PlayingQueueAdapter(
             root.setOnClickListener {
                 val newVideoId = streamItem.url?.toID() ?: return@setOnClickListener
 
-                val oldPosition = PlayingQueue.currentIndex()
-                // get the new position from the queue to work properly after reordering the queue
-                val newPosition = PlayingQueue.getStreams().indexOfFirst {
-                    it.url?.toID() == newVideoId
-                }.takeIf { it >= 0 } ?: return@setOnClickListener
-                PlayingQueue.updateCurrent(streamItem)
-
-                // select the new item in the queue and update the selected item in the UI
+                // Let the player service update the current item after navigation begins. This
+                // preserves the previous index so forward jumps can schedule audio cleanup.
                 onQueueItemSelected(newVideoId)
-                notifyItemChanged(oldPosition)
-                notifyItemChanged(newPosition)
             }
         }
     }

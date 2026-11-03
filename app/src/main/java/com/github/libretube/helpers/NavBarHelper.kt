@@ -39,8 +39,12 @@ object NavBarHelper {
         val p = PopupMenu(context, null)
         MenuInflater(context).inflate(R.menu.bottom_menu, p.menu)
 
-        if (prefItems.size == p.menu.size) {
-            return prefItems.map {
+        val normalizedPrefs = if (prefItems.size == p.menu.size - 1) {
+            prefItems + (p.menu.size - 1).toString()
+        } else prefItems
+
+        if (normalizedPrefs.size == p.menu.size) {
+            return normalizedPrefs.map {
                 val menuItemId = p.menu[it.replace("-", "").toInt()].itemId
                 val isVisible = !it.contains("-")
                 menuItemId to isVisible
@@ -94,15 +98,17 @@ object NavBarHelper {
     fun getStartFragmentId(context: Context): Int {
         val pref = PreferenceHelper.getInt(PreferenceKeys.START_FRAGMENT, Int.MAX_VALUE)
         val defaultNavItems = getDefaultNavBarItems(context)
-        return if (pref == Int.MAX_VALUE) {
+        val startDestination = if (pref == Int.MAX_VALUE) {
             getNavBarItemPreference(context).firstOrNull { (_, isVisible) -> isVisible }?.first
                 ?: R.id.homeFragment
         } else {
-            defaultNavItems[pref].itemId
+            defaultNavItems.getOrNull(pref)?.itemId ?: R.id.homeFragment
         }
+        return startDestination.takeUnless { it == R.id.action_play_queue } ?: R.id.homeFragment
     }
 
     fun setStartFragment(context: Context, itemId: Int) {
+        if (itemId == R.id.action_play_queue) return
         val index = getDefaultNavBarItems(context).indexOfFirst { it.itemId == itemId }
         PreferenceHelper.putInt(PreferenceKeys.START_FRAGMENT, index)
     }

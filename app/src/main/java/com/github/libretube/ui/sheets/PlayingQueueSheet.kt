@@ -40,6 +40,7 @@ class PlayingQueueSheet : ExpandedBottomSheet(R.layout.queue_bottom_sheet) {
         binding.optionsRecycler.layoutManager = LinearLayoutManager(context)
         val adapter = PlayingQueueAdapter { videoId ->
             setFragmentResult(PLAYING_QUEUE_REQUEST_KEY, bundleOf(IntentData.videoId to videoId))
+            dismiss()
         }
         binding.optionsRecycler.adapter = adapter
 

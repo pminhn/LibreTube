@@ -28,4 +28,9 @@
         android:title="@string/downloads"
         android:visible="false" />
 
+    <item
+        android:id="@+id/action_play_queue"
+        android:icon="@drawable/ic_queue"
+        android:title="@string/play_queue" />
+
 </menu>

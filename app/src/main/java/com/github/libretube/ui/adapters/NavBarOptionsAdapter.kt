@@ -33,6 +33,7 @@ class NavBarOptionsAdapter(
                 if (item.itemId == selectedHomeTabId) R.drawable.ic_home_dark else R.drawable.ic_home_outlined
             )
             home.setOnClickListener {
+                if (item.itemId == R.id.action_play_queue) return@setOnClickListener
                 if (selectedHomeTabId == item.itemId) {
                     return@setOnClickListener
                 }
@@ -42,6 +43,7 @@ class NavBarOptionsAdapter(
                     notifyItemChanged(it)
                 }
             }
+            home.isEnabled = item.itemId != R.id.action_play_queue
             checkbox.setOnClickListener {
                 item.isVisible = checkbox.isChecked
             }
