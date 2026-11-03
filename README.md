@@ -172,3 +172,7 @@ LibreTube is [Free Software](https://en.wikipedia.org/wiki/Free_software): You c
 <a href="#start-of-content">↥ Scroll to top</a>
 </td></table>
 </div>
+
+## Audiobook features in this fork
+
+This fork's `master` branch follows the original LibreTube project. Fork-specific audiobook features are developed on the [`audiobook-mode` branch](https://github.com/pminhn/LibreTube/tree/audiobook-mode). That branch adds audiobook playback, a persistent play queue with resume support, and background audio downloads. These changes are not part of the original LibreTube project.
