@@ -52,15 +52,46 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
             --base audiobook-mode-merge \
-            --json number --jq '.[0].number // empty')
+            --json number,headRefName --jq '.[0] // {}')
+          number=$(echo "$pr" | jq -r '.number // empty')
+          head_branch=$(echo "$pr" | jq -r '.headRefName // empty')
           echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "head_branch=$head_branch" >> "$GITHUB_OUTPUT"
           if [ -n "$number" ]; then
             echo "open=true" >> "$GITHUB_OUTPUT"
             echo "An open master-to-audiobook-mode-merge PR already exists: #$number"
           else
             echo "open=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add today's upstream changes to the open PR
+        id: update_pr
+        if: steps.pending_pr.outputs.open == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pending_pr.outputs.number }}
+          PR_HEAD_BRANCH: ${{ steps.pending_pr.outputs.head_branch }}
+        run: |
+          git fetch --no-tags origin master "$PR_HEAD_BRANCH"
+          git checkout -B "$PR_HEAD_BRANCH" "origin/$PR_HEAD_BRANCH"
+          before=$(git rev-parse HEAD)
+          if git merge --no-edit origin/master; then
+            after=$(git rev-parse HEAD)
+            if [ "$before" != "$after" ]; then
+              git push origin "HEAD:$PR_HEAD_BRANCH"
+              echo "updated=true" >> "$GITHUB_OUTPUT"
+              echo "Updated PR #$PR_NUMBER with the latest fork master."
+            else
+              echo "updated=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            git merge --abort || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --body "Today's upstream sync updated the fork's master, but merging those new changes into this PR branch conflicted. The PR does not yet include today's master changes. Please merge the latest master into the PR head branch, resolve the conflicts, and push the resolution."
+            echo "::warning::Latest upstream changes could not be merged into the open PR branch. The PR has been commented for review."
           fi
 
       - name: Merge fork master into audiobook-mode-merge
