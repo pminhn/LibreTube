@@ -4,16 +4,22 @@ on:
   schedule:
     - cron: "30 2 * * *"
   workflow_dispatch:
+  pull_request:
+    types: [closed]
+    branches: [audiobook-mode-merge]
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 concurrency:
   group: sync-upstream-audiobook-mode
   cancel-in-progress: false
 
 jobs:
-  sync:
+  sync-and-build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Check out audiobook branch
@@ -41,22 +47,75 @@ jobs:
             exit 1
           fi
 
-      - name: Merge fork master into audiobook-mode
-        id: merge
+      - name: Check for an open conflict review PR
+        id: pending_pr
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git checkout audiobook-mode
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+            --base audiobook-mode-merge \
+            --json number --jq '.[0].number // empty')
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          if [ -n "$number" ]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+            echo "An open master-to-audiobook-mode-merge PR already exists: #$number"
+          else
+            echo "open=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge fork master into audiobook-mode-merge
+        id: merge
+        if: steps.pending_pr.outputs.open != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --no-tags origin master audiobook-mode audiobook-mode-merge
+          if git show-ref --verify --quiet refs/remotes/origin/audiobook-mode-merge; then
+            git checkout -B audiobook-mode-merge origin/audiobook-mode-merge
+            branch_existed=true
+          else
+            git checkout -B audiobook-mode-merge origin/audiobook-mode
+            branch_existed=false
+          fi
+
           before=$(git rev-parse HEAD)
-          if git merge --no-edit master; then
+          if git merge --no-edit origin/master; then
             after=$(git rev-parse HEAD)
-            if [ "$before" != "$after" ]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
+            if [ "$before" = "$after" ] && [ "$branch_existed" = false ]; then
               echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
+
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git push origin HEAD:audiobook-mode-merge
           else
             git merge --abort || true
-            echo "::error::Fork master changes conflict with audiobook-mode. Master was synced, but audiobook-mode was not changed. Resolve the conflict manually, then rerun this workflow."
-            exit 1
+            git push origin HEAD:audiobook-mode-merge
+
+            pr_head="master-sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            git push origin "origin/master:refs/heads/$pr_head"
+            pr_url=$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base audiobook-mode-merge \
+              --head "$pr_head" \
+              --reviewer "$GITHUB_REPOSITORY_OWNER" \
+              --title "Resolve upstream sync conflicts for audiobook-mode" \
+              --body "The automatic merge of master into audiobook-mode-merge has conflicts. Please review and resolve them in this pull request. After it is merged, the workflow will build the result and update audiobook-mode if the build succeeds." 2>/dev/null) || {
+              closed_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --state closed \
+                --base audiobook-mode-merge \
+                --head "$GITHUB_REPOSITORY_OWNER:$pr_head" \
+                --json number,mergedAt \
+                --jq '[.[] | select(.mergedAt == null)][0].number // empty')
+              if [ -z "$closed_pr" ]; then
+                echo "::error::Could not create the conflict review pull request."
+                exit 1
+              fi
+              gh pr reopen "$closed_pr" --repo "$GITHUB_REPOSITORY"
+              gh pr edit "$closed_pr" --repo "$GITHUB_REPOSITORY" --add-reviewer "$GITHUB_REPOSITORY_OWNER"
+              pr_url=$(gh pr view "$closed_pr" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
+            }
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Opened conflict review PR: $pr_url"
           fi
 
       - name: Set up JDK 17
@@ -68,9 +127,110 @@ jobs:
           cache: gradle
 
       - name: Build debug app after merge
+        id: build
         if: steps.merge.outputs.changed == 'true'
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Push synchronized audiobook branch
-        if: steps.merge.outputs.changed == 'true'
-        run: git push origin HEAD:audiobook-mode
+      - name: Alert on build failure
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const title = "Audiobook sync build failed";
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = `The debug build failed for the audiobook sync branch.\n\n- Branch: audiobook-mode-merge\n- Commit: ${context.sha}\n- [View workflow run](${runUrl})\n\nFix the build on audiobook-mode-merge, then run Sync upstream manually to retry.`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner, repo, state: "open", per_page: 100
+            });
+            const existing = issues.find(issue => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `Another sync build failed: [workflow run](${runUrl})`
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, body, assignees: [owner]
+              });
+            }
+
+      - name: Merge tested branch into audiobook-mode and delete it
+        if: steps.build.outcome == 'success'
+        run: |
+          git fetch --no-tags origin audiobook-mode audiobook-mode-merge
+          git checkout -B audiobook-mode origin/audiobook-mode
+          git merge --no-edit origin/audiobook-mode-merge
+          git push origin HEAD:audiobook-mode
+          git push origin --delete audiobook-mode-merge
+          git ls-remote --heads origin 'refs/heads/master-sync-*' |
+            while read -r _ ref; do
+              branch=${ref#refs/heads/}
+              git push origin --delete "$branch"
+            done
+
+  finish-reviewed-merge:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'audiobook-mode-merge' &&
+      startsWith(github.event.pull_request.head.ref, 'master-sync-')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out reviewed merge branch
+        uses: actions/checkout@v4
+        with:
+          ref: audiobook-mode-merge
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Build reviewed merge
+        id: build
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Alert on build failure
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const title = "Audiobook sync build failed";
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = `The debug build failed after the conflict-review PR was merged.\n\n- Branch: audiobook-mode-merge\n- Commit: ${context.sha}\n- [View workflow run](${runUrl})\n\nFix the build on audiobook-mode-merge, then run Sync upstream manually to retry.`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner, repo, state: "open", per_page: 100
+            });
+            const existing = issues.find(issue => !issue.pull_request && issue.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `Another sync build failed: [workflow run](${runUrl})`
+              });
+            } else {
+              await github.rest.issues.create({
+                owner, repo, title, body, assignees: [owner]
+              });
+            }
+
+      - name: Merge tested branch into audiobook-mode and delete it
+        if: steps.build.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin audiobook-mode audiobook-mode-merge
+          git checkout -B audiobook-mode origin/audiobook-mode
+          git merge --no-edit origin/audiobook-mode-merge
+          git push origin HEAD:audiobook-mode
+          git push origin --delete audiobook-mode-merge
+          git ls-remote --heads origin 'refs/heads/master-sync-*' |
+            while read -r _ ref; do
+              branch=${ref#refs/heads/}
+              git push origin --delete "$branch"
+            done
