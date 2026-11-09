@@ -77,6 +77,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 class MainActivity : AbstractPlayerHostActivity() {
     private lateinit var binding: ActivityMainBinding
+    private var isInitialResume = true
 
     lateinit var navController: NavController
     private var startFragmentId = R.id.homeFragment
@@ -692,7 +693,7 @@ class MainActivity : AbstractPlayerHostActivity() {
         PlayingQueueSheet().show(supportFragmentManager)
     }
 
-    private fun resumeSavedQueueFromLauncherIntent() {
+    private fun resumeSavedQueueFromLauncherIntent(reconnectAudioController: Boolean = false) {
         val launchIntent = intent ?: return
         if (launchIntent.action != Intent.ACTION_MAIN ||
             launchIntent.categories?.contains(Intent.CATEGORY_LAUNCHER) != true ||
@@ -720,7 +721,11 @@ class MainActivity : AbstractPlayerHostActivity() {
         // A restored audio player fragment will restart the service if its media session is empty.
         if (runOnAudioPlayerFragment {
                 android.util.Log.d("QueueResume", "Found restored audio player fragment; asking it to reconnect to saved queue")
-                resumeSavedQueueIfNeeded()
+                if (reconnectAudioController) {
+                    resumeSavedQueueOnForeground()
+                } else {
+                    resumeSavedQueueIfNeeded()
+                }
                 true
             }
         ) return
@@ -740,6 +745,24 @@ class MainActivity : AbstractPlayerHostActivity() {
                 isOffline = PlayingQueue.queueMode == PlayingQueueMode.OFFLINE
             )
         )
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        // onCreate already handles the first launch. Recheck the saved queue when this existing
+        // activity returns from the background, where Android does not call onCreate/onNewIntent.
+        if (isInitialResume) {
+            isInitialResume = false
+            return
+        }
+
+        window.decorView.post {
+            if (!isFinishing && !isDestroyed) {
+                android.util.Log.i("QueueResume", "Main activity returned to foreground; rechecking saved queue")
+                resumeSavedQueueFromLauncherIntent(reconnectAudioController = true)
+            }
+        }
     }
 
     override fun onUserLeaveHint() {

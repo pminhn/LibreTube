@@ -81,6 +81,7 @@ class AudioPlayerFragment : Fragment(R.layout.fragment_audio_player), AudioPlaye
 
     private var handler = Handler(Looper.getMainLooper())
     private var isPaused = !PlayerHelper.playAutomatically
+    private var isReconnectingForQueueResume = false
 
     var isOffline: Boolean = false
         private set
@@ -511,6 +512,30 @@ class AudioPlayerFragment : Fragment(R.layout.fragment_audio_player), AudioPlaye
                 .onSuccess { android.util.Log.i("QueueResume", "Audio service restart command completed for $currentVideoId: ${it.resultCode}") }
                 .onFailure { android.util.Log.e("QueueResume", "Audio service restart command failed for $currentVideoId", it) }
         }, MoreExecutors.directExecutor())
+    }
+
+    fun resumeSavedQueueOnForeground() {
+        if (!PlayingQueue.shouldResumeOnStartup) return
+
+        val controller = playerController
+        if (controller?.isConnected == true) {
+            resumeSavedQueueIfNeeded()
+            return
+        }
+        if (isReconnectingForQueueResume || !isAdded) return
+
+        android.util.Log.i("QueueResume", "Audio player returned to foreground without a connected media controller; reconnecting")
+        isReconnectingForQueueResume = true
+        BackgroundHelper.startCurrentMediaService(requireContext()) { reconnectedController ->
+            isReconnectingForQueueResume = false
+            if (!isAdded) {
+                reconnectedController.release()
+                return@startCurrentMediaService
+            }
+            playerController?.release()
+            playerController = reconnectedController
+            handleServiceConnection()
+        }
     }
 
     override fun onDestroyView() {
