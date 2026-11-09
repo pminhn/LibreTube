@@ -219,7 +219,11 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
             }
 
             args.containsKey(PlayerCommand.PLAY_VIDEO_BY_ID.name) -> {
-                navigateVideo(args.getString(PlayerCommand.PLAY_VIDEO_BY_ID.name) ?: return)
+                val requestedVideoId = args.getString(PlayerCommand.PLAY_VIDEO_BY_ID.name) ?: return
+                val replaceQueue = args.getBoolean(IntentData.replaceQueue, false)
+                if (replaceQueue) onQueueReplaced(args.getString(IntentData.playlistId))
+                android.util.Log.i(TAG(), "Manual navigation command: videoId=$requestedVideoId, replaceQueue=$replaceQueue, playlistId=${args.getString(IntentData.playlistId)}")
+                navigateVideo(requestedVideoId)
             }
 
             args.containsKey(PlayerCommand.PLAY_NEXT_VIDEO.name) -> {
@@ -307,6 +311,8 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
             startPlayback()
         }
     }
+
+    protected open fun onQueueReplaced(playlistId: String?) = Unit
 
     protected fun setSponsorBlockSegments(segments: List<Segment>) {
         sponsorBlockSegments = segments

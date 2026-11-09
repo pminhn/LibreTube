@@ -305,8 +305,8 @@ class AudioPlayerFragment : Fragment(R.layout.fragment_audio_player), AudioPlaye
         }
     }
 
-    fun playNextVideo(videoId: String) {
-        playerController?.navigateVideo(videoId)
+    fun playNextVideo(videoId: String, playlistId: String? = null, replaceQueue: Boolean = false) {
+        playerController?.navigateVideo(videoId, playlistId, replaceQueue)
     }
 
     @SuppressLint("ClickableViewAccessibility")

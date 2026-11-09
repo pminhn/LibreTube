@@ -16,4 +16,5 @@ data class PlayerData(
     val isOffline: Boolean = false,
     val downloadTab: DownloadTab? = null,
     val downloadSortingOrder: DownloadSortingOrder? = null,
+    val replaceQueue: Boolean = false,
 ) : Parcelable

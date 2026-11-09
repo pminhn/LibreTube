@@ -1089,10 +1089,14 @@ class PlayerFragment : Fragment(R.layout.fragment_player), CustomPlayerCallback 
      * You many only call this if the video is of the same type as the type of the currently running
      * video, i.e. either both are online or both are offline.
      */
-    fun playVideo(videoId: String) {
+    fun playVideo(videoId: String, playlistId: String? = null, replaceQueue: Boolean = false) {
         playerController.sendCustomCommand(
             AbstractPlayerService.runPlayerActionCommand,
-            bundleOf(PlayerCommand.PLAY_VIDEO_BY_ID.name to videoId)
+            bundleOf(
+                PlayerCommand.PLAY_VIDEO_BY_ID.name to videoId,
+                IntentData.playlistId to playlistId,
+                IntentData.replaceQueue to replaceQueue
+            )
         )
     }
 

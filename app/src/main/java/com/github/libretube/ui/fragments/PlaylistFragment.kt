@@ -258,6 +258,7 @@ class PlaylistFragment : DynamicLayoutManagerFragment(R.layout.fragment_playlist
                 binding.playAll.isGone = true
             } else {
                 binding.playAll.setOnClickListener {
+                    android.util.Log.i("PlayingQueue", "Play all selected for playlist $playlistId")
                     startVideoItemPlayback(getSortedVideos().first().item)
                 }
             }
@@ -322,7 +323,8 @@ class PlaylistFragment : DynamicLayoutManagerFragment(R.layout.fragment_playlist
             playerData = PlayerData(
                 streamItem.url!!.toID(),
                 playlistId = playlistId,
-                keepQueue = true
+                keepQueue = true,
+                replaceQueue = true
             )
         )
     }
@@ -332,6 +334,7 @@ class PlaylistFragment : DynamicLayoutManagerFragment(R.layout.fragment_playlist
 
         val sortedStreams = getSortedVideos()
         PlayingQueue.setStreams(sortedStreams.map { it.item })
+        android.util.Log.i("PlayingQueue", "Replaced queue from playlist $playlistId: itemCount=${sortedStreams.size}, selectedVideoId=${streamItem.url?.toID()}")
 
         navigateVideo(streamItem)
     }

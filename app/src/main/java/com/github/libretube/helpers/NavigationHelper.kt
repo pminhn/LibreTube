@@ -64,8 +64,12 @@ object NavigationHelper {
             if (playerData.isOffline != isOffline || playerData.videoId == null) return@runOnPlayerFragment false
 
             try {
-                PlayingQueue.clearAfterCurrent()
-                this.playVideo(playerData.videoId.toID())
+                if (!playerData.replaceQueue) PlayingQueue.clearAfterCurrent()
+                this.playVideo(
+                    playerData.videoId.toID(),
+                    playlistId = playerData.playlistId,
+                    replaceQueue = playerData.replaceQueue
+                )
 
                 if (audioOnlyPlayerRequested || (PreferenceHelper.getBoolean(PreferenceKeys.AUDIOBOOK_MODE, false) && !forceVideo)) {
                     // switch to audio only player
@@ -90,8 +94,12 @@ object NavigationHelper {
             // otherwise, recreate the player
             if (playerData.isOffline != isOffline || playerData.videoId == null) return@runOnAudioPlayerFragment false
 
-            PlayingQueue.clearAfterCurrent()
-            this.playNextVideo(playerData.videoId.toID())
+            if (!playerData.replaceQueue) PlayingQueue.clearAfterCurrent()
+            this.playNextVideo(
+                playerData.videoId.toID(),
+                playlistId = playerData.playlistId,
+                replaceQueue = playerData.replaceQueue
+            )
 
             if (forceVideo || (!audioOnlyPlayerRequested && !audioOnlyMode && !audiobookMode)) {
                 // switch to video only player

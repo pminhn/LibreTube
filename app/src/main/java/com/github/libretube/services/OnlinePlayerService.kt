@@ -359,6 +359,12 @@ open class OnlinePlayerService : AbstractPlayerService() {
         super.navigateVideo(videoId)
     }
 
+    override fun onQueueReplaced(playlistId: String?) {
+        this.playlistId = playlistId
+        channelId = null
+        Log.i(TAG(), "Playback queue replaced; playlist source is now $playlistId")
+    }
+
     /**
      * Sets the [MediaItem] with the [streams] into the [exoPlayer]
      */
