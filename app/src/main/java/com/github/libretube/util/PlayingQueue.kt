@@ -152,9 +152,31 @@ object PlayingQueue {
 
     fun updateCurrent(streamItem: StreamItem) = synchronized(queue) {
         restoreIfNeeded()
+        val previousId = currentStream?.url?.toID()
+        val nextId = streamItem.url?.toID()
+
+        // Stream metadata can change between loading the playlist and fetching stream details.
+        // Match by video ID and replace the existing queue entry instead of appending a duplicate.
+        val currentQueueIndex = queue.indexOfFirst {
+            it.url?.toID() == previousId
+        }
+        val targetIndex = when {
+            nextId == previousId && currentQueueIndex >= 0 -> currentQueueIndex
+            else -> {
+                val startIndex = currentQueueIndex + 1
+                (startIndex until queue.size).firstOrNull { queue[it].url?.toID() == nextId }
+                    ?: queue.indices.firstOrNull { queue[it].url?.toID() == nextId }
+            }
+        }
+
+        if (targetIndex != null) queue[targetIndex] = streamItem
         currentStream = streamItem
 
-        if (!contains(streamItem)) add(streamItem)
+        if (targetIndex == null) queue.add(streamItem)
+        android.util.Log.i(
+            "PlayingQueue",
+            "Current queue item updated: from=$previousId to=$nextId, matchedIndex=$targetIndex, index=${currentIndex()}, size=${queue.size}"
+        )
         persist()
     }
 
@@ -183,10 +205,16 @@ object PlayingQueue {
 
     fun setStreams(streams: List<StreamItem>) = synchronized(queue) {
         restoreIfNeeded()
+        val previousSize = queue.size
+        val previousCurrentId = currentStream?.url?.toID()
         queue.clear()
 
         queue.addAll(streams)
         if (currentStream?.url?.toID() !in streams.map { it.url?.toID() }) currentStream = null
+        android.util.Log.i(
+            "PlayingQueue",
+            "Queue streams replaced: previousSize=$previousSize, newSize=${queue.size}, previousCurrentId=$previousCurrentId, retainedCurrentId=${currentStream?.url?.toID()}"
+        )
         persist()
     }
 
@@ -267,21 +295,42 @@ object PlayingQueue {
             add(*streams.toTypedArray())
             return
         }
-        val currentStream = currentStreamItem ?: this.currentStream
-        // if the stream already got added to the queue earlier, although it's not yet
-        // been found in the playlist, remove it and re-add it later
-        var reAddStream = true
-        if (currentStream != null && streams.any { it.url?.toID() == currentStream.url?.toID() }) {
-            queue.removeAll { it.url?.toID() == currentStream.url?.toID() }
-            reAddStream = false
-        }
-        // add all new stream items to the queue
-        add(*streams.toTypedArray())
+        val activeStream = currentStreamItem ?: this.currentStream
+        var replacedCount = 0
+        var appendedCount = 0
 
-        if (currentStream != null && reAddStream) {
-            // re-add the stream to the end of the queue
-            updateCurrent(currentStream)
+        // Playlist pages overlap items that are already in the queue. Refresh their metadata
+        // in place and append only unseen IDs, so loading another page cannot move the active
+        // item behind earlier playlist entries or create replay duplicates.
+        streams.forEach { stream ->
+            val streamId = stream.url?.toID() ?: return@forEach
+            val existingIndex = queue.indexOfFirst { it.url?.toID() == streamId }
+            if (existingIndex >= 0) {
+                queue[existingIndex] = stream
+                replacedCount++
+            } else {
+                queue.add(stream)
+                appendedCount++
+            }
         }
+
+        activeStream?.let { current ->
+            val currentId = current.url?.toID()
+            val currentIndex = queue.indexOfFirst { it.url?.toID() == currentId }
+            if (currentIndex >= 0) {
+                queue[currentIndex] = current
+            } else {
+                queue.add(current)
+                appendedCount++
+            }
+            this.currentStream = current
+        }
+
+        android.util.Log.i(
+            "PlayingQueue",
+            "Merged main playlist page: pageSize=${streams.size}, refreshed=$replacedCount, appended=$appendedCount, currentId=${this.currentStream?.url?.toID()}, currentIndex=${currentIndex()}, queueSize=${queue.size}"
+        )
+        persist()
     }
 
     private suspend fun fetchMoreFromPlaylist(

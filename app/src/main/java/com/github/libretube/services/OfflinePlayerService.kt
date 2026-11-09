@@ -21,6 +21,7 @@ import com.github.libretube.db.obj.DownloadWithItems
 import com.github.libretube.db.obj.filterByTab
 import com.github.libretube.enums.FileType
 import com.github.libretube.extensions.parcelable
+import com.github.libretube.extensions.toID
 import com.github.libretube.extensions.setMetadata
 import com.github.libretube.extensions.toAndroidUri
 import com.github.libretube.extensions.updateParameters
@@ -56,6 +57,8 @@ open class OfflinePlayerService : AbstractPlayerService() {
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
+                android.util.Log.i("OfflinePlayerService", "Offline item ended: videoId=$videoId, transitioning=$isTransitioning, current=${PlayingQueue.getCurrent()?.url?.toID()}, index=${PlayingQueue.currentIndex()}, size=${PlayingQueue.size()}, next=${PlayingQueue.getNext()}")
+                if (isTransitioning) return
                 scope.launch(Dispatchers.IO) {
                     AudiobookDownloadHelper.scheduleCleanup(videoId)
                 }

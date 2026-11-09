@@ -255,19 +255,25 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
      */
     fun playNextVideo(videoId: String? = null, relatedStreams: List<StreamItem>? = null) {
         if (PlayingQueue.repeatMode == Player.REPEAT_MODE_ONE) {
+            android.util.Log.i(TAG(), "Repeating current item because repeat-one is enabled: videoId=${this.videoId}")
             exoPlayer?.seekTo(0)
             return
         }
 
         if (!shouldHandleAutoplay) {
+            android.util.Log.i(TAG(), "Automatic queue advance suppressed by player UI state for $videoId")
             return
         }
 
         val nextVideo = videoId ?: PlayingQueue.getNext()
         ?: relatedStreams?.firstOrNull { !it.isLive }?.url?.toID()
             ?.takeIf { PlayerHelper.autoPlayEnabled && PlayerHelper.relatedStreamsEnabled }
-        ?: return
+        ?: run {
+            android.util.Log.i(TAG(), "No next item selected: videoId=${this.videoId}, queueIndex=${PlayingQueue.currentIndex()}, queueSize=${PlayingQueue.size()}, repeatMode=${PlayingQueue.repeatMode}, autoplayEnabled=${PlayerHelper.autoPlayEnabled}")
+            return
+        }
 
+        android.util.Log.i(TAG(), "Advancing from ${this.videoId} to $nextVideo; queueIndex=${PlayingQueue.currentIndex()}, queueSize=${PlayingQueue.size()}, repeatMode=${PlayingQueue.repeatMode}")
         navigateVideo(nextVideo)
     }
 
@@ -278,6 +284,8 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
      */
     @CallSuper
     open fun navigateVideo(videoId: String) {
+        android.util.Log.i(TAG(), "Starting video transition: from=${this.videoId.takeIf { this::videoId.isInitialized }}, to=$videoId, queueIndex=${PlayingQueue.currentIndex()}, queueSize=${PlayingQueue.size()}")
+        isTransitioning = true
         PlayingQueue.setShouldResumeOnStartup(true)
         val previousVideoId = this.videoId.takeIf { this::videoId.isInitialized }
         if (previousVideoId != null) {
@@ -289,6 +297,8 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
             }
         }
         sponsorBlockSegments = emptyList()
+        PlayingQueue.getStreams().firstOrNull { it.url?.toID() == videoId }
+            ?.let(PlayingQueue::updateCurrent)
         exoPlayer?.clearMediaItems()
 
         this.videoId = videoId

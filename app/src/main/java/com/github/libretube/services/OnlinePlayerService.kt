@@ -36,6 +36,7 @@ import com.github.libretube.enums.SyncServerType
 import com.github.libretube.extensions.TAG
 import com.github.libretube.extensions.parcelable
 import com.github.libretube.extensions.setMetadata
+import com.github.libretube.extensions.toID
 import com.github.libretube.extensions.toastFromMainDispatcher
 import com.github.libretube.extensions.toastFromMainThread
 import com.github.libretube.extensions.updateParameters
@@ -126,6 +127,8 @@ open class OnlinePlayerService : AbstractPlayerService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 Player.STATE_ENDED -> {
+                    Log.i(TAG(), "Online item ended: videoId=$videoId, transitioning=$isTransitioning, current=${PlayingQueue.getCurrent()?.url?.toID()}, index=${PlayingQueue.currentIndex()}, size=${PlayingQueue.size()}, next=${PlayingQueue.getNext()}")
+                    if (isTransitioning) return
                     scope.launch(Dispatchers.IO) {
                         AudiobookDownloadHelper.scheduleCleanup(videoId)
                     }
@@ -133,7 +136,8 @@ open class OnlinePlayerService : AbstractPlayerService() {
                 }
 
                 Player.STATE_IDLE -> {
-                    onDestroy()
+                    Log.i(TAG(), "Online player became idle: videoId=$videoId, transitioning=$isTransitioning")
+                    if (!isTransitioning) onDestroy()
                 }
 
                 Player.STATE_BUFFERING -> {}
