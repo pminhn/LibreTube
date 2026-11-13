@@ -2,6 +2,7 @@ package com.github.libretube.services
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.PowerManager
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
@@ -85,6 +86,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
      * If set to `false`, the player UI views have to handle autoplay themselves.
      */
     protected var shouldHandleAutoplay = true
+    private var playbackTransitionWakeLock: PowerManager.WakeLock? = null
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -103,6 +105,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
 
         override fun onPlayerError(error: PlaybackException) {
             android.util.Log.e(TAG(), "Player error: videoId=${videoId.takeIf { ::videoId.isInitialized }}, queueIndex=${PlayingQueue.currentIndex()}, errorCode=${error.errorCodeName}", error)
+            releasePlaybackTransitionWakeLock("player error ${error.errorCodeName}")
             // show a toast on errors
             toastFromMainThread(error.localizedMessage.orEmpty())
         }
@@ -122,6 +125,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
                 Player.STATE_READY -> {
                     android.util.Log.i(TAG(), "Player ready: videoId=${videoId.takeIf { ::videoId.isInitialized }}, positionMs=${exoPlayer?.currentPosition}, durationMs=${exoPlayer?.duration}, isPlaying=${exoPlayer?.isPlaying}")
                     isTransitioning = false
+                    releasePlaybackTransitionWakeLock("player ready")
                 }
             }
         }
@@ -480,10 +484,38 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     @CallSuper
     open suspend fun startPlayback() {
         isTransitioning = true
+        acquirePlaybackTransitionWakeLock()
 
         updatePlaylistMetadata {
             setExtras(bundleOf(IntentData.videoId to videoId))
         }
+    }
+
+    /** Keep CPU work alive while the next item is looked up and prepared in the background. */
+    private fun acquirePlaybackTransitionWakeLock() {
+        runCatching {
+            val wakeLock = playbackTransitionWakeLock ?:
+                (getSystemService(POWER_SERVICE) as PowerManager)
+                    .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:playback-transition")
+                    .apply {
+                        setReferenceCounted(false)
+                        playbackTransitionWakeLock = this
+                    }
+            if (!wakeLock.isHeld) {
+                // Bound the lock in case extraction or stream preparation hangs indefinitely.
+                wakeLock.acquire(3 * 60 * 1000L)
+                Log.i(TAG(), "Acquired background playback transition wake lock for videoId=${videoId.takeIf { ::videoId.isInitialized }}")
+            }
+        }.onFailure { Log.w(TAG(), "Could not acquire playback transition wake lock", it) }
+    }
+
+    private fun releasePlaybackTransitionWakeLock(reason: String) {
+        runCatching {
+            playbackTransitionWakeLock?.takeIf { it.isHeld }?.let {
+                it.release()
+                Log.i(TAG(), "Released background playback transition wake lock: $reason")
+            }
+        }.onFailure { Log.w(TAG(), "Could not release playback transition wake lock: $reason", it) }
     }
 
     private fun saveWatchPosition() {
@@ -558,6 +590,7 @@ abstract class AbstractPlayerService : MediaLibraryService(), MediaLibrarySessio
     }
 
     override fun onDestroy() {
+        releasePlaybackTransitionWakeLock("service destroyed")
         // wait for a short time before killing the mediaSession
         // as the playerController must be released before we finish the session
         // otherwise there would be a
