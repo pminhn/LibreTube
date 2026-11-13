@@ -205,8 +205,7 @@ If playback resumes at the wrong position, connect the phone with USB debugging 
 
 ```powershell
 & "$env:ANDROID_HOME\platform-tools\adb.exe" logcat -d -v time |
-    Select-String 'AbstractPlayerService|OnlinePlayerService' |
+    Select-String 'AbstractPlayerService|QueueResume|PlayingQueue|OnlinePlayerService' |
     Set-Content playback-resume-log.txt
 ```
 
-Collect the log soon after reproducing the problem. It can include nearby playback events, so review it before sharing.
